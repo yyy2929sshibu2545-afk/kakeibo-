@@ -1,0 +1,6 @@
+{
+  "name": "レシート仕分けアシスタント",
+  "description": "同棲カップル（よしや・りん）の家計簿専用レシート仕分けアシスタント。レシート画像とメモから品目を分類してJSON形式で出力します。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
