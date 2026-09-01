@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>よしや＆りん 家計簿</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     body { -webkit-tap-highlight-color: transparent; }
@@ -31,7 +32,7 @@
       </button>
       <button onclick="switchTab('fixed')" class="nav-btn flex flex-col items-center gap-1 w-16 transition-colors" data-tab="fixed">
         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-        <span class="text-[10px] font-bold">固定費</span>
+        <span class="text-[10px] font-bold">出費管理</span>
       </button>
       <button onclick="switchTab('utilities')" class="nav-btn flex flex-col items-center gap-1 w-16 transition-colors" data-tab="utilities">
         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
@@ -41,6 +42,11 @@
   </div>
 
   <script>
+    // ==========================================
+    // バックエンド通信設定
+    // ==========================================
+    const BASE_URL = "http://localhost:8000";
+
     const initialData = {
       ratio: { yoshiya: 0.58, rin: 0.42 },
       sharedFixed: [
@@ -55,6 +61,7 @@
         yoshiya: {
           income: 208640,
           savings: { shared: 30000, personal: 20000 },
+          savingsHistory: [],
           items: [
             { id: 1, name: "車ローン", amount: 35000 },
             { id: 2, name: "ahamo基本料", amount: 2700 },
@@ -73,6 +80,7 @@
         rin: {
           income: 180000,
           savings: { shared: 30000, personal: 20000 },
+          savingsHistory: [],
           items: [
             { id: 13, name: "スマホ代", amount: 3500 },
             { id: 14, name: "車代", amount: 20000 },
@@ -103,10 +111,12 @@
     };
 
     const currentMonthYYYYMM = new Date().toISOString().substring(0, 7);
+    
+    // アプリのグローバル状態
     let state = {
       tab: 'dashboard',
       fixedTab: 'yoshiya', // 'yoshiya' or 'rin'
-      data: JSON.parse(JSON.stringify(initialData)),
+      data: JSON.parse(JSON.stringify(initialData)), // フォールバックデータ
       scan: { staging: [], loading: false, chatMsg: '' },
       historyMonth: currentMonthYYYYMM,
       editingReceiptId: null,
@@ -114,6 +124,63 @@
       newUtility: { month: '', electricity: '', gas: '', water: '' },
       settlements: {}
     };
+
+    // ==========================================
+    // バックエンド通信関数群
+    // ==========================================
+    
+    // 起動時のデータ取得
+    async function initApp() {
+      try {
+        const response = await fetch(`${BASE_URL}/api/data`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && Object.keys(data).length > 0) {
+             state.data = data;
+          } else {
+             // サーバー側にデータがない場合は初期データを送信
+             state.data = JSON.parse(JSON.stringify(initialData));
+             await saveData();
+          }
+        } else {
+          console.warn("サーバーからのデータ取得に失敗しました。デフォルトデータを使用します。");
+        }
+      } catch (e) {
+        console.error("通信エラー:", e);
+      } finally {
+        render();
+      }
+    }
+
+    // データの保存（非同期・オプティミスティックUIのためawaitせず呼び出すことが多い）
+    async function saveData() {
+      try {
+        const response = await fetch(`${BASE_URL}/api/data`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(state.data)
+        });
+        if (!response.ok) {
+          throw new Error('保存に失敗しました');
+        }
+      } catch (e) {
+        console.error("データの保存エラー:", e);
+        customAlert("データの保存に失敗しました。サーバーの状態を確認してください。");
+      }
+    }
+
+    // データリセット（初期化）
+    function resetData() {
+      customConfirm('データをすべて初期化しますか？', async () => {
+        state.data = JSON.parse(JSON.stringify(initialData));
+        await saveData();
+        location.reload();
+      });
+    }
+
+    // ==========================================
+    // UIロジック
+    // ==========================================
 
     function toggleSettlement(month) {
       if (!state.settlements) state.settlements = {};
@@ -256,7 +323,10 @@
       };
     }
 
-    // Renders
+    // ==========================================
+    // レンダリング関数群
+    // ==========================================
+    
     function renderDashboard() {
       const currentMonth = new Date().toISOString().substring(0, 7);
       const s = calculateSummary(currentMonth);
@@ -265,6 +335,11 @@
       return `
         <div class="p-5 animate-[fadeIn_0.2s_ease-out]">
           
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-black text-slate-800">ホーム</h2>
+            <button onclick="resetData()" class="text-xs text-slate-400 font-bold bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors border border-slate-200 shadow-sm"><i class="fas fa-trash-restore mr-1"></i>初期化</button>
+          </div>
+
           <!-- 1. 最上部：今月の精算ハイライトカード -->
           <div class="bg-gradient-to-br ${s.rinTransferAmount >= 0 ? 'from-rose-400 to-orange-400' : 'from-orange-400 to-rose-400'} rounded-3xl p-6 shadow-lg mb-6 text-white relative overflow-hidden">
             <div class="absolute -right-10 -top-10 w-32 h-32 bg-white/10 rounded-full z-0"></div>
@@ -320,7 +395,7 @@
                 <div class="flex justify-between text-orange-700/80"><span>個人固定</span><span>-¥${s.yFixed.toLocaleString()}</span></div>
               </div>
               <div class="pt-2 border-t border-orange-200/50">
-                <p class="text-[9px] font-bold text-orange-500 mb-0.5">残り自由費</p>
+                <p class="text-[9px] font-bold text-orange-50 mb-0.5">残り自由費</p>
                 <p class="text-lg font-black text-orange-600">¥${s.yRemaining.toLocaleString()}</p>
               </div>
             </div>
@@ -438,7 +513,7 @@
           </div>
 
           ${state.scan.chatMsg ? `
-            <div class="mt-6 bg-blue-50 text-blue-800 p-5 rounded-2xl text-sm font-bold border border-blue-100 shadow-sm leading-relaxed">
+            <div class="mt-6 bg-blue-50 text-blue-800 p-5 rounded-2xl text-sm font-bold border border-blue-100 shadow-sm leading-relaxed whitespace-pre-wrap">
               🤖 ${state.scan.chatMsg}
             </div>
           ` : ''}
@@ -503,7 +578,7 @@
                 </div>
                 <div class="flex gap-2">
                   <button onclick="deleteReceipt(${r.id})" class="flex-1 py-2 bg-red-50 text-red-600 rounded-lg font-bold text-xs">削除</button>
-                  <button onclick="state.editingReceiptId = null; render();" class="flex-1 py-2 bg-slate-100 text-slate-600 rounded-lg font-bold text-xs">取消</button>
+                  <button onclick="cancelEditReceipt(${r.id})" class="flex-1 py-2 bg-slate-100 text-slate-600 rounded-lg font-bold text-xs">取消</button>
                   <button onclick="saveEditReceipt(${r.id})" class="flex-1 py-2 bg-green-500 text-white rounded-lg font-bold text-xs shadow-sm">保存</button>
                 </div>
               </div>
@@ -565,7 +640,12 @@
 
       return `
         <div class="p-5 animate-[fadeIn_0.2s_ease-out]">
-          <h2 class="text-2xl font-black text-slate-800 mb-6">内訳・履歴</h2>
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-black text-slate-800">登録データ一覧</h2>
+            <button onclick="addNewReceiptManual()" class="text-xs font-bold text-white bg-blue-500 hover:bg-blue-600 px-4 py-2 rounded-xl shadow-sm transition-colors flex items-center gap-1">
+              <i class="fas fa-plus"></i> 追加
+            </button>
+          </div>
           
           <div class="mb-6 relative">
             <select class="w-full p-4 rounded-2xl border border-slate-200 font-bold outline-none bg-white text-slate-700 shadow-sm appearance-none" onchange="state.historyMonth = event.target.value; render();">
@@ -630,18 +710,63 @@
       const s = calculateSummary(currentMonth);
 
       const fixedSum = owner === 'yoshiya' ? s.yFixed : s.rFixed;
-      const shareAmount = owner === 'yoshiya' ? s.yShare : s.rShare;
-      const freeMoney = owner === 'yoshiya' ? s.yRemaining : s.rRemaining;
+      const personalReceipts = owner === 'yoshiya' ? s.yPersonalReceipts : s.rPersonalReceipts;
+      const commonHalf = s.commonReceiptsSum / 2;
+      const totalExpense = fixedSum + personalReceipts + commonHalf;
+      const freeMoney = dataObj.income - totalExpense;
       
       const pocketMoney = freeMoney - dataObj.savings.shared - dataObj.savings.personal;
 
+      // Ensure chart gets rendered after DOM update
+      setTimeout(() => {
+        const ctx = document.getElementById('savingsChart');
+        if (ctx) {
+          if (window.savingsChartInstance) {
+            window.savingsChartInstance.destroy();
+          }
+
+          const history = dataObj.savingsHistory || [];
+          const sortedHistory = [...history].sort((a, b) => a.month.localeCompare(b.month));
+          
+          const labels = sortedHistory.map(h => formatMonth(h.month));
+          const amounts = sortedHistory.map(h => h.amount);
+          
+          // Add current month target
+          labels.push('今月');
+          amounts.push(dataObj.savings.shared + dataObj.savings.personal);
+
+          window.savingsChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: labels,
+              datasets: [{
+                label: '貯金額の推移',
+                data: amounts,
+                borderColor: owner === 'yoshiya' ? '#f97316' : '#ec4899',
+                backgroundColor: owner === 'yoshiya' ? 'rgba(249, 115, 22, 0.1)' : 'rgba(236, 72, 153, 0.1)',
+                borderWidth: 3,
+                tension: 0.4,
+                fill: true
+              }]
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { display: false } },
+              scales: {
+                y: { beginAtZero: true, ticks: { callback: function(value) { return '¥' + value.toLocaleString(); } } }
+              }
+            }
+          });
+        }
+      }, 0);
+
       return `
         <div class="p-5 animate-[fadeIn_0.2s_ease-out]">
-          <h2 class="text-2xl font-black text-slate-800 mb-6">個人固定費・貯金</h2>
+          <h2 class="text-2xl font-black text-slate-800 mb-6">よしやとりんの出費</h2>
           
           <div class="flex gap-2 mb-6">
-            <button onclick="state.fixedTab='yoshiya'; render();" class="flex-1 py-3 font-bold rounded-2xl transition-colors ${owner==='yoshiya'?'bg-orange-500 text-white shadow-md':'bg-white text-slate-500 border border-slate-200'}">よしや (58%)</button>
-            <button onclick="state.fixedTab='rin'; render();" class="flex-1 py-3 font-bold rounded-2xl transition-colors ${owner==='rin'?'bg-pink-500 text-white shadow-md':'bg-white text-slate-500 border border-slate-200'}">りん (42%)</button>
+            <button onclick="state.fixedTab='yoshiya'; render();" class="flex-1 py-3 font-bold rounded-2xl transition-colors ${owner==='yoshiya'?'bg-orange-500 text-white shadow-md':'bg-white text-slate-500 border border-slate-200'}">よしや</button>
+            <button onclick="state.fixedTab='rin'; render();" class="flex-1 py-3 font-bold rounded-2xl transition-colors ${owner==='rin'?'bg-pink-500 text-white shadow-md':'bg-white text-slate-500 border border-slate-200'}">りん</button>
           </div>
 
           <div class="bg-white rounded-3xl p-6 shadow-sm border ${t.border100} mb-6 relative overflow-hidden">
@@ -651,8 +776,25 @@
               <div class="flex justify-between items-center mb-6 ${t.bg50} p-4 rounded-2xl border ${t.border100}">
                 <span class="${t.text800} font-bold text-sm">手取り収入 (目安)</span>
                 <div class="flex items-center text-xl font-black ${t.text700}">
-                  ¥<input type="number" class="bg-transparent w-28 text-right outline-none border-b ${t.border300} ${t.focusBorder500} ml-1 transition-colors" value="${dataObj.income}" onchange="state.data.personalFixed['${owner}'].income = parseInt(this.value)||0; render();">
+                  ¥<input type="number" class="bg-transparent w-28 text-right outline-none border-b ${t.border300} ${t.focusBorder500} ml-1 transition-colors" value="${dataObj.income}" onchange="state.data.personalFixed['${owner}'].income = parseInt(this.value)||0; saveData(); render();">
                 </div>
+              </div>
+
+              <div class="mb-8 bg-slate-800 rounded-3xl p-5 shadow-lg text-white relative overflow-hidden">
+                 <div class="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent pointer-events-none"></div>
+                 <h3 class="text-xs font-bold text-slate-400 mb-1 relative z-10">今月の出費合計</h3>
+                 <p class="text-4xl font-black relative z-10 mb-4">¥${totalExpense.toLocaleString()}</p>
+                 
+                 <div class="space-y-1.5 text-xs font-bold text-slate-300 relative z-10">
+                   <div class="flex justify-between"><span>① 個人の固定費</span><span>¥${fixedSum.toLocaleString()}</span></div>
+                   <div class="flex justify-between"><span>② 個人のレシート</span><span>¥${personalReceipts.toLocaleString()}</span></div>
+                   <div class="flex justify-between"><span>③ 共通レシート (半分)</span><span>¥${commonHalf.toLocaleString()}</span></div>
+                 </div>
+              </div>
+
+              <div class="mt-4 mb-8 p-5 ${t.bg100} rounded-2xl flex flex-col justify-center items-center shadow-inner border ${t.border200}">
+                 <span class="text-[10px] font-bold ${t.text800} mb-1">今月自由に使えるお金</span>
+                 <span class="text-3xl font-black ${t.text700}">¥${freeMoney.toLocaleString()}</span>
               </div>
 
               <h3 class="font-bold text-sm text-slate-700 mb-3 flex justify-between items-end">
@@ -676,50 +818,33 @@
               
               <hr class="${t.border100} my-6 border-dashed">
               
-              <div class="space-y-2 text-sm ${t.bg50} p-4 rounded-xl border ${t.border100}">
-                <div class="flex justify-between">
-                  <span class="text-slate-500 font-bold text-[11px] uppercase tracking-wider">手取り目安</span>
-                  <span class="font-black text-slate-700">¥${dataObj.income.toLocaleString()}</span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="text-slate-500 font-bold text-[11px] uppercase tracking-wider">個人固定費</span>
-                  <span class="font-black text-slate-700">- ¥${fixedSum.toLocaleString()}</span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="text-slate-500 font-bold text-[11px] uppercase tracking-wider">共通負担 (今月)</span>
-                  <span class="font-black text-slate-700">- ¥${shareAmount.toLocaleString()}</span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="text-slate-500 font-bold text-[11px] uppercase tracking-wider">個人レシート分</span>
-                  <span class="font-black text-slate-700">- ¥${(owner === 'yoshiya' ? s.yPersonalReceipts : s.rPersonalReceipts).toLocaleString()}</span>
-                </div>
-              </div>
-              
-              <div class="mt-4 p-5 ${t.bg100} rounded-2xl flex flex-col justify-center items-center shadow-inner border ${t.border200}">
-                 <span class="text-[10px] font-black ${t.text800} mb-1">今月自由に使えるお金</span>
-                 <span class="text-3xl font-black ${t.text700}">¥${freeMoney.toLocaleString()}</span>
-              </div>
-
               <h4 class="font-bold text-sm mt-8 mb-3 text-slate-700">貯金シミュレーション</h4>
               <div class="space-y-3 mb-6">
                  <div class="flex justify-between items-center bg-slate-50 p-3.5 rounded-xl border border-slate-100">
                     <label class="text-xs font-bold text-slate-600">2人で貯める共通貯金額</label>
                     <div class="flex items-center text-sm font-black text-slate-700">
-                      ¥<input type="number" class="bg-transparent w-20 text-right outline-none border-b border-slate-300 ${t.focusBorder400} ml-1 transition-colors" value="${dataObj.savings.shared}" onchange="state.data.personalFixed['${owner}'].savings.shared = parseInt(this.value)||0; render();">
+                      ¥<input type="number" class="bg-transparent w-20 text-right outline-none border-b border-slate-300 ${t.focusBorder400} ml-1 transition-colors" value="${dataObj.savings.shared}" onchange="state.data.personalFixed['${owner}'].savings.shared = parseInt(this.value)||0; saveData(); render();">
                     </div>
                  </div>
                  <div class="flex justify-between items-center bg-slate-50 p-3.5 rounded-xl border border-slate-100">
                     <label class="text-xs font-bold text-slate-600">個人の目標貯金額</label>
                     <div class="flex items-center text-sm font-black text-slate-700">
-                      ¥<input type="number" class="bg-transparent w-20 text-right outline-none border-b border-slate-300 ${t.focusBorder400} ml-1 transition-colors" value="${dataObj.savings.personal}" onchange="state.data.personalFixed['${owner}'].savings.personal = parseInt(this.value)||0; render();">
+                      ¥<input type="number" class="bg-transparent w-20 text-right outline-none border-b border-slate-300 ${t.focusBorder400} ml-1 transition-colors" value="${dataObj.savings.personal}" onchange="state.data.personalFixed['${owner}'].savings.personal = parseInt(this.value)||0; saveData(); render();">
                     </div>
                  </div>
+                 <button onclick="recordSavings('${owner}')" class="w-full mt-4 py-3.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl shadow-md transition-colors flex items-center justify-center gap-2">
+                   <i class="fas fa-piggy-bank"></i> 今月の貯金実績をグラフに記録
+                 </button>
               </div>
 
-              <div class="p-6 bg-slate-800 rounded-2xl flex flex-col justify-center items-center shadow-lg relative overflow-hidden">
-                 <div class="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent"></div>
+              <div class="p-6 bg-slate-800 rounded-2xl flex flex-col justify-center items-center shadow-lg relative overflow-hidden mb-6">
+                 <div class="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent pointer-events-none"></div>
                  <span class="text-[11px] font-bold text-slate-300 mb-1 relative z-10">貯金後の残り自由費 (お小遣い)</span>
                  <span class="text-4xl font-black text-white relative z-10">¥${pocketMoney.toLocaleString()}</span>
+              </div>
+
+              <div class="bg-white p-4 rounded-2xl border ${t.border100} shadow-sm">
+                <canvas id="savingsChart" width="400" height="250"></canvas>
               </div>
 
             </div>
@@ -839,7 +964,10 @@
       updateNav();
     }
 
-    // Actions
+    // ==========================================
+    // アクション処理（UI反映後に非同期でsaveDataを呼ぶ）
+    // ==========================================
+
     function switchTab(tab) {
       state.tab = tab;
       state.editingReceiptId = null; 
@@ -870,6 +998,46 @@
       render();
     }
 
+    function addNewReceiptManual() {
+      const newId = Date.now();
+      
+      let defaultDate = state.historyMonth + '-01';
+      const today = new Date();
+      const currentMonth = today.toISOString().substring(0, 7);
+      if (state.historyMonth === currentMonth) {
+        defaultDate = today.toISOString().substring(0, 10);
+      }
+
+      const newItem = {
+        id: newId,
+        date: defaultDate,
+        store: "",
+        name: "",
+        amount: 0,
+        category: "食費",
+        owner: "共通",
+        payer: "yoshiya"
+      };
+      
+      state.data.receipts.unshift(newItem);
+      state.editingReceiptId = newId;
+      state.isNewReceipt = true;
+      state.expandedGroups[`${defaultDate}::不明`] = true;
+      
+      render();
+      saveData();
+    }
+
+    function cancelEditReceipt(id) {
+      if (state.isNewReceipt && state.editingReceiptId === id) {
+        state.data.receipts = state.data.receipts.filter(r => r.id !== id);
+        state.isNewReceipt = false;
+        saveData(); // 空データの削除なので保存
+      }
+      state.editingReceiptId = null;
+      render();
+    }
+
     function saveEditReceipt(id) {
       const idx = state.data.receipts.findIndex(r => r.id === id);
       if(idx > -1) {
@@ -881,16 +1049,22 @@
         state.data.receipts[idx].owner = document.getElementById(`edit-owner-${id}`).value;
         state.data.receipts[idx].payer = document.getElementById(`edit-payer-${id}`).value;
       }
+      state.isNewReceipt = false;
       state.editingReceiptId = null;
       render();
+      saveData();
     }
 
     function deleteReceipt(id) {
-      if(confirm('この履歴を削除しますか？')) {
+      customConfirm('この履歴を削除しますか？', () => {
         state.data.receipts = state.data.receipts.filter(r => r.id !== id);
-        state.editingReceiptId = null;
+        if (state.editingReceiptId === id) {
+          state.isNewReceipt = false;
+          state.editingReceiptId = null;
+        }
         render();
-      }
+        saveData();
+      });
     }
 
     function updateFixedItem(owner, id, field, value) {
@@ -898,12 +1072,14 @@
       if(item) {
         item[field] = value;
         render();
+        saveData();
       }
     }
 
     function deleteFixedItem(owner, id) {
       state.data.personalFixed[owner].items = state.data.personalFixed[owner].items.filter(i => i.id !== id);
       render();
+      saveData();
     }
 
     function addFixedItem(owner) {
@@ -913,7 +1089,7 @@
         amount: 0
       });
       render();
-      // focus logic could be added here
+      saveData();
     }
 
     function addUtility() {
@@ -921,22 +1097,26 @@
        const e = parseInt(document.getElementById('utilE').value) || 0;
        const g = parseInt(document.getElementById('utilG').value) || 0;
        const w = parseInt(document.getElementById('utilW').value) || 0;
-       if(!month) return alert('月を入力してください');
+       if(!month) return customAlert('月を入力してください');
        
        state.data.utilityHistory.push({
            month, electricity: e, gas: g, water: w
        });
        state.newUtility = { month: '', electricity: '', gas: '', water: '' };
        render();
+       saveData();
     }
 
+    // ==========================================
+    // バックエンド経由のレシートAI解析処理
+    // ==========================================
     async function parseReceipt() {
       const input = document.getElementById('chatInput').value;
       const fileInput = document.getElementById('cameraInput');
       const file = fileInput ? fileInput.files[0] : null;
 
       if (!file && !input.trim()) {
-        alert("画像かメモを入力してください。");
+        customAlert("画像かメモを入力してください。");
         return;
       }
 
@@ -946,7 +1126,7 @@
 
       try {
         let base64 = undefined;
-        let mime = undefined;
+        let mime = undefined; // バックエンドがmimeを必要とする場合
         if (file) {
           base64 = await new Promise((resolve) => {
             const reader = new FileReader();
@@ -956,7 +1136,7 @@
                 const canvas = document.createElement('canvas');
                 let width = img.width;
                 let height = img.height;
-                const MAX_SIZE = 1200;
+                const MAX_SIZE = 800; // 極限圧縮：長辺800pxに縮小
 
                 if (width > height) {
                   if (width > MAX_SIZE) {
@@ -975,10 +1155,22 @@
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0, width, height);
 
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-                const [meta, data] = dataUrl.split(',');
+                // 極限圧縮：グレースケール（白黒）化
+                const imgData = ctx.getImageData(0, 0, width, height);
+                const data = imgData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                  const avg = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
+                  data[i] = avg;
+                  data[i+1] = avg;
+                  data[i+2] = avg;
+                }
+                ctx.putImageData(imgData, 0, 0);
+
+                // JPEG画質 0.5でエンコード
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+                const [meta, b64Data] = dataUrl.split(',');
                 mime = meta.split(':')[1].split(';')[0];
-                resolve(data);
+                resolve(b64Data);
               };
               img.src = e.target.result;
             };
@@ -986,15 +1178,46 @@
           });
         }
 
-        const res = await fetch('/api/parse-receipt', {
+        const payload = {};
+        if (base64) payload.image_base64 = base64;
+        if (input.trim()) payload.memo = input.trim();
+
+        const res = await fetch(`${BASE_URL}/api/parse-receipt`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ imageBase64: base64, mimeType: mime, memo: input })
+          body: JSON.stringify(payload)
         });
-        const json = await res.json();
+
+        if (!res.ok) {
+           throw new Error(`サーバーエラー: ${res.status}`);
+        }
+
+        const jsonResponse = await res.json();
         
-        if (json.type === 'json' && Array.isArray(json.content)) {
-          state.scan.staging = json.content.map(item => {
+        // FastAPI側からの返却値（テキスト）をパースする
+        // ※ サーバー側の実装に合わせて柔軟に取り出せるようにする
+        let responseText = "";
+        if (typeof jsonResponse === 'string') {
+           responseText = jsonResponse;
+        } else if (jsonResponse.text) {
+           responseText = jsonResponse.text;
+        } else if (jsonResponse.result) {
+           responseText = jsonResponse.result;
+        } else {
+           responseText = JSON.stringify(jsonResponse);
+        }
+        
+        let jsonContent;
+        try {
+          jsonContent = JSON.parse(responseText);
+        } catch(e) {
+          // Markdownの不要なコードブロックなどを取り除いて再パース
+          const cleaned = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+          jsonContent = JSON.parse(cleaned);
+        }
+        
+        if (Array.isArray(jsonContent)) {
+          state.scan.staging = jsonContent.map(item => {
             let cat = '食費';
             if (item.category === 'daily') cat = '生活雑貨';
             if (item.category === 'social') cat = '交際費';
@@ -1004,17 +1227,18 @@
               date: item.date || new Date().toISOString().split('T')[0],
               store: item.store || '不明',
               name: item.name,
-              amount: item.price,
+              amount: item.price || 0,
               category: cat,
               owner: item.owner === 'common' ? '共通' : (item.owner === 'yoshiya' ? 'yoshiya' : 'rin'),
               payer: 'yoshiya' // Default payer
             }
           });
         } else {
-          state.scan.chatMsg = json.content || "エラーが発生しました";
+          state.scan.chatMsg = "正しく解析できませんでした。";
         }
       } catch(e) {
-        alert("エラーが発生しました: " + e.message);
+        console.error("解析エラー:", e);
+        customAlert("エラーが発生しました: " + e.message);
       } finally {
         state.scan.loading = false;
         render();
@@ -1035,17 +1259,120 @@
       state.data.receipts.unshift(...newItems);
       if(newItems.length > 0) {
           const key = `${newItems[0].date}::${newItems[0].store}`;
-          state.expandedGroups[key] = true; // Auto-expand the new entry
+          state.expandedGroups[key] = true;
           state.historyMonth = newItems[0].date.substring(0, 7);
       }
       state.scan.staging = [];
-      alert('帳簿に登録しました！');
+      
+      customAlert('帳簿に登録しました！');
       switchTab('history');
+      saveData();
     }
 
-    document.addEventListener('DOMContentLoaded', () => {
+    function recordSavings(owner) {
+      const currentMonth = new Date().toISOString().substring(0, 7);
+      const dataObj = state.data.personalFixed[owner];
+      if (!dataObj.savingsHistory) {
+         dataObj.savingsHistory = [];
+      }
+      
+      const totalSavings = dataObj.savings.shared + dataObj.savings.personal;
+      const existing = dataObj.savingsHistory.find(h => h.month === currentMonth);
+      if (existing) {
+         existing.amount = totalSavings;
+      } else {
+         dataObj.savingsHistory.push({ month: currentMonth, amount: totalSavings });
+      }
+      
       render();
+      saveData();
+      customAlert('今月の貯金額を登録しました！');
+    }
+
+    // ==========================================
+    // アプリ初期化
+    // ==========================================
+    document.addEventListener('DOMContentLoaded', () => {
+      // 初期描画（デフォルトデータで画面を即時表示）
+      render();
+      // その後、バックエンドから最新データを非同期取得
+      initApp();
     });
+  </script>
+
+  <!-- ==========================================
+       カスタムモーダル (Alert & Confirm 共通)
+       ========================================== -->
+  <div id="custom-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 hidden opacity-0 transition-opacity duration-200">
+    <div class="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-11/12 transform scale-95 transition-transform duration-200" id="custom-modal-panel">
+      <h3 class="text-lg font-black text-slate-800 mb-2" id="custom-modal-title">確認</h3>
+      <p class="text-sm font-medium text-slate-600 mb-6" id="custom-modal-message"></p>
+      <div class="flex justify-end gap-3" id="custom-modal-buttons">
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function showModal(title, message, type, onConfirm) {
+      const modal = document.getElementById('custom-modal');
+      const panel = document.getElementById('custom-modal-panel');
+      const titleEl = document.getElementById('custom-modal-title');
+      const msgEl = document.getElementById('custom-modal-message');
+      const btnsEl = document.getElementById('custom-modal-buttons');
+
+      titleEl.textContent = title;
+      msgEl.textContent = message;
+      btnsEl.innerHTML = '';
+
+      const close = () => {
+        modal.classList.remove('opacity-100');
+        panel.classList.remove('scale-100');
+        setTimeout(() => {
+          modal.classList.add('hidden');
+        }, 200);
+      };
+
+      if (type === 'confirm') {
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'px-4 py-2 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm transition-colors hover:bg-slate-200';
+        cancelBtn.textContent = 'キャンセル';
+        cancelBtn.onclick = close;
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.className = 'px-4 py-2 bg-red-500 text-white rounded-xl font-bold text-sm shadow-sm transition-colors hover:bg-red-600';
+        confirmBtn.textContent = '削除する';
+        if (title.includes('初期化')) {
+          confirmBtn.textContent = '初期化する';
+        }
+        confirmBtn.onclick = () => {
+          close();
+          if (onConfirm) onConfirm();
+        };
+
+        btnsEl.appendChild(cancelBtn);
+        btnsEl.appendChild(confirmBtn);
+      } else {
+        const okBtn = document.createElement('button');
+        okBtn.className = 'px-5 py-2 bg-blue-500 text-white rounded-xl font-bold text-sm shadow-sm transition-colors hover:bg-blue-600';
+        okBtn.textContent = 'OK';
+        okBtn.onclick = close;
+        btnsEl.appendChild(okBtn);
+      }
+
+      modal.classList.remove('hidden');
+      // trigger reflow
+      void modal.offsetWidth;
+      modal.classList.add('opacity-100');
+      panel.classList.add('scale-100');
+    }
+
+    function customAlert(message) {
+      showModal('お知らせ', message, 'alert');
+    }
+
+    function customConfirm(message, onConfirm) {
+      showModal('確認', message, 'confirm', onConfirm);
+    }
   </script>
 </body>
 </html>
