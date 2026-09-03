@@ -88,7 +88,8 @@ def parse_receipt(payload: ReceiptParseRequest):
     contents.append(prompt)
 
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        # ここを 1.5-flash に修正しました
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(contents)
         return {"text": response.text}
     except Exception as e:
