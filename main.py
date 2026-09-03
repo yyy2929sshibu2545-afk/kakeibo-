@@ -5,8 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import requests
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 
 app = FastAPI()
 
@@ -19,12 +18,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 環境変数からAPIキーとFirebaseのURLを取得
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 FIREBASE_URL = os.environ.get("FIREBASE_URL")
 
-# 新しいSDK（google-genai）のクライアント初期化
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+# 旧SDK（安定版）の初期化
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 class ReceiptParseRequest(BaseModel):
     image_base64: Optional[str] = None
@@ -56,22 +55,18 @@ def save_data(payload: dict):
 
 @app.post("/api/parse-receipt")
 def parse_receipt(payload: ReceiptParseRequest):
-    if not client:
+    if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API Key is not configured")
     
     contents = []
     
-    # 画像がある場合は追加
     if payload.image_base64:
         image_bytes = base64.b64decode(payload.image_base64)
-        contents.append(
-            types.Part.from_bytes(
-                data=image_bytes,
-                mime_type="image/jpeg",
-            )
-        )
+        contents.append({
+            "mime_type": "image/jpeg",
+            "data": image_bytes
+        })
     
-    # プロンプトとユーザーからのメモを組み立て
     prompt = """
 あなたは優秀な家計簿アシスタントです。提供されたレシート画像および、ユーザーからの指示・メモを解析し、以下のJSON形式の配列のみを出力してください。他の余計な文章（マークダウンの ```json や解説など）は一切含めず、純粋なJSON配列の文字列だけを返してください。
 
@@ -93,11 +88,8 @@ def parse_receipt(payload: ReceiptParseRequest):
     contents.append(prompt)
 
     try:
-        # 最新のgemini-2.5-flashモデルを使用
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=contents,
-        )
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        response = model.generate_content(contents)
         return {"text": response.text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
