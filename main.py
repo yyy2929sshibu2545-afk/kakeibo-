@@ -88,9 +88,10 @@ def parse_receipt(payload: ReceiptParseRequest):
     contents.append(prompt)
 
     try:
-        # ここを 1.5-flash に修正しました
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(contents)
         return {"text": response.text}
     except Exception as e:
+        # ★★★ エラーの真実をログに吐き出す処理 ★★★
+        print(f"★★★ 隠れていたエラー原因: {str(e)} ★★★")
         raise HTTPException(status_code=500, detail=str(e))
